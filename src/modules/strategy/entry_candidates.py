@@ -888,6 +888,8 @@ def _load_market_scan_seed_inputs(*, market: str, limit: int) -> dict[str, dict]
     if limit <= 0:
         return {}
     mkt = (market or "CN").strip().upper()
+    if mkt not in _configured_scan_markets():
+        return {}
     symbols = list(
         dict.fromkeys(
             [str(s).strip() for s in MARKET_SCAN_SEED_SYMBOLS.get(mkt, []) if str(s).strip()]
@@ -975,6 +977,22 @@ def _merge_market_scan_seed(
     return added
 
 
+def _configured_scan_markets() -> list[str]:
+    """市场扫描覆盖的市场，来自 Settings.market_scan_markets。
+
+    默认只扫 CN：机会发现与后验评估只为这些市场拉成交榜/涨幅榜与 K 线。
+    没有自选或持仓的市场扫了只会产生无效请求和失败日志。配置留空则回落全部市场。
+    """
+    from src.platform.marketdata.models import MARKETS
+
+    all_markets = [code.value for code in MARKETS]
+    raw = (getattr(Settings(), "market_scan_markets", "") or "").strip()
+    if not raw:
+        return all_markets
+    wanted = {part.strip().upper() for part in raw.replace(";", ",").split(",") if part.strip()}
+    ordered = [code for code in all_markets if code in wanted]
+    return ordered or all_markets
+
 def _load_market_scan_inputs(limit_per_market: int = 60, *, markets: list[str] | None = None) -> dict[str, dict]:
     collector = EastMoneyDiscoveryCollector(
         proxy=_resolve_market_scan_proxy(),
@@ -983,7 +1001,8 @@ def _load_market_scan_inputs(limit_per_market: int = 60, *, markets: list[str] |
     safe_limit = max(20, int(limit_per_market))
     min_required = min(max(12, int(safe_limit * 0.55)), safe_limit)
 
-    for market in (("CN", "HK", "US") if markets is None else markets):
+    scan_markets = _configured_scan_markets()
+    for market in (scan_markets if markets is None else markets):
         try:
             turnover = _run_async(
                 collector.fetch_hot_stocks(
@@ -1104,7 +1123,8 @@ def _load_market_scan_inputs(limit_per_market: int = 60, *, markets: list[str] |
                 )
 
     # Final per-market cap and stable ordering.
-    for market in (("CN", "HK", "US") if markets is None else markets):
+    scan_markets = _configured_scan_markets()
+    for market in (scan_markets if markets is None else markets):
         keys = [k for k in result.keys() if k.startswith(f"{market}:")]
         if len(keys) <= safe_limit:
             continue

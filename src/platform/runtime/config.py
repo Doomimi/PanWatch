@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # day_of_week 使用 POSIX cron 语义(1-5=周一到周五)
     daily_report_cron: str = "30 15 * * 1-5"
 
+    # 市场扫描覆盖的市场（逗号分隔）。默认只扫 CN：机会发现/后验评估只拉这些市场的
+    # 成交榜/涨幅榜与 K 线，避免为没有持仓的市场白采并刷失败日志。留空则回落到全部市场。
+    market_scan_markets: str = "CN"
+
     # 部署执行时区（任务调度、通知静默时段；浏览器显示使用用户本地时区）。
     # 统一使用一个环境变量控制：TZ（默认 Asia/Shanghai）。
     # 建议使用 IANA 时区名，如 Asia/Shanghai, America/New_York。
