@@ -14,9 +14,19 @@ logger = logging.getLogger(__name__)
 
 
 class PriceAlertScheduler:
-    def __init__(self, timezone: str = "UTC", interval_seconds: int = 60):
+    def __init__(
+        self,
+        timezone: str = "UTC",
+        interval_seconds: int = 20,
+        jitter_seconds: int = 3,
+        delivery_interval_seconds: int = 3,
+    ):
         self.scheduler = AsyncIOScheduler(timezone=timezone)
-        self.interval_seconds = max(15, int(interval_seconds))
+        # Floors keep a misconfigured deploy from hammering the quote source or
+        # SQLite; the jitter stays well below the interval it offsets.
+        self.interval_seconds = max(5, int(interval_seconds))
+        self.jitter_seconds = max(0, min(int(jitter_seconds), max(1, self.interval_seconds // 2)))
+        self.delivery_interval_seconds = max(1, int(delivery_interval_seconds))
         self._running = False
         self._delivering = False
         self.delivery_worker = AlertDeliveryWorker()
@@ -61,7 +71,7 @@ class PriceAlertScheduler:
 
     def start(self):
         self.scheduler.add_job(
-            self._delivery_job, "interval", seconds=10,
+            self._delivery_job, "interval", seconds=self.delivery_interval_seconds,
             id="price_alert_delivery", replace_existing=True,
             coalesce=True, max_instances=1,
         )
@@ -69,7 +79,7 @@ class PriceAlertScheduler:
             self._scan_job,
             "interval",
             seconds=self.interval_seconds,
-            jitter=20,  # 抖动错峰,避免与模拟盘扫描每 60s 同刻并发写 SQLite
+            jitter=self.jitter_seconds,  # 错峰避免与模拟盘扫描同刻并发写 SQLite；不应拿它换延迟
             id="price_alert_scan",
             replace_existing=True,
             coalesce=True,
@@ -78,7 +88,10 @@ class PriceAlertScheduler:
         self.scheduler.start()
         from src.platform.scheduling.scheduler_registry import register
         register("price_alert", self.scheduler)
-        logger.info(f"价格提醒调度器已启动，扫描间隔 {self.interval_seconds}s")
+        logger.info(
+            f"价格提醒调度器已启动：扫描间隔 {self.interval_seconds}s（抖动 {self.jitter_seconds}s），"
+            f"投递轮询 {self.delivery_interval_seconds}s"
+        )
 
     def shutdown(self):
         try:
