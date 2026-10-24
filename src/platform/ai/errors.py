@@ -135,6 +135,26 @@ def _flatten_body(value: Any) -> str:
     return str(value)
 
 
+def _error_payload(error: BaseException) -> dict[str, Any]:
+    """Return the provider error payload as a dict, or {} when unavailable.
+
+    The openai SDK only fills error.body when the response body was parsed into
+    the exception. Gateways that re-raise with an explicit body leave it None, so
+    the payload is read back from the response as a fallback. Without this, a local
+    proxy returning {error: {code: model_not_found}} with HTTP 500 is classified as a
+    generic service outage and the actionable detail is lost.
+    """
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        return body
+    response = getattr(error, "response", None)
+    if response is None:
+        return {}
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 def _matches(text: str, *markers: str) -> bool:
     return any(marker in text for marker in markers)
 
@@ -144,8 +164,9 @@ def classify_ai_service_error(error: BaseException) -> AIErrorDescriptor:
     if isinstance(error, AIServiceError):
         return descriptor_for_code(error.code)
 
-    body = _flatten_body(getattr(error, "body", None))
-    provider_code = str(getattr(error, "code", "") or "")
+    payload = _error_payload(error)
+    body = _flatten_body(payload)
+    provider_code = str(payload.get("code") or getattr(error, "code", "") or "")
     text = " ".join((str(error), body, provider_code)).lower()
     status = getattr(error, "status_code", None)
 
@@ -272,22 +293,20 @@ def diagnostic_ai_error_message(error: BaseException) -> str:
     exception traceback.
     """
     descriptor = classify_ai_service_error(error)
-    body = getattr(error, "body", None)
-    nested = body.get("error") if isinstance(body, dict) else None
+    payload = _error_payload(error)
+    nested = payload.get("error")
     if not isinstance(nested, dict):
         nested = {}
 
     provider_code = (
         nested.get("code")
-        or (body.get("code") if isinstance(body, dict) else None)
+        or payload.get("code")
         or getattr(error, "code", None)
     )
-    provider_message = nested.get("message") or (
-        body.get("message") if isinstance(body, dict) else None
-    )
-    if not provider_message and isinstance(body, dict) and isinstance(body.get("error"), str):
-        provider_message = body["error"]
-    if not provider_message and not isinstance(body, dict):
+    provider_message = nested.get("message") or payload.get("message")
+    if not provider_message and isinstance(payload.get("error"), str):
+        provider_message = payload["error"]
+    if not provider_message and not payload:
         provider_message = getattr(error, "message", None) or str(error)
 
     status = getattr(error, "status_code", None)
