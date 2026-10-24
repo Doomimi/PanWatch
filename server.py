@@ -1542,11 +1542,13 @@ async def lifespan(app):
     logger.info("Agent 调度器已启动")
     try:
         settings = Settings()
+        # getattr 底底:这三个字段是后加的，老配置/测试用的 settings 可能没有，
+        # 不该因此把整个启动流程带崩。
         price_alert_scheduler = PriceAlertScheduler(
             timezone=settings.app_timezone,
-            interval_seconds=settings.price_alert_scan_interval_seconds,
-            jitter_seconds=settings.price_alert_scan_jitter_seconds,
-            delivery_interval_seconds=settings.price_alert_delivery_interval_seconds,
+            interval_seconds=getattr(settings, "price_alert_scan_interval_seconds", 20),
+            jitter_seconds=getattr(settings, "price_alert_scan_jitter_seconds", 3),
+            delivery_interval_seconds=getattr(settings, "price_alert_delivery_interval_seconds", 3),
         )
         price_alert_scheduler.start()
         logger.info("价格提醒调度器已启动")
