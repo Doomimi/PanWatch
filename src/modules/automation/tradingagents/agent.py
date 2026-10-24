@@ -383,6 +383,7 @@ class TradingAgentsAgent(BaseAgent):
             ta_result=ta_result,
             model_label=context.model_label,
             output_language=output_language,
+            provenance=self._build_provenance(ta_config, data),
         )
         result.raw_data["asset_type"] = stock.asset_type
 
@@ -614,6 +615,57 @@ class TradingAgentsAgent(BaseAgent):
             propagator.get_graph_args = _patched  # type: ignore[method-assign]
         except Exception as e:
             logger.warning(f"[TA] 注入 LangGraph callbacks 失败: {e}")
+
+    @staticmethod
+    def _build_provenance(ta_config: dict, data: dict) -> dict:
+        """汇总本次运行的决策溯源信息(不含评级/置信度推导,部分由
+        decision._build_provenance 负责)。
+
+        - data_injection: collect 阶段实际拿到什么(行情/K线/资金流/事件/财报/技术指标)
+        - run: 超时/重试/缓存等本次运行参数
+
+        任何异常都安全降级，不影响主流程。
+        """
+        provenance: dict[str, Any] = {}
+
+        injection: dict[str, Any] = {}
+        klines = data.get("klines") or []
+        injection["kline_bars"] = len(klines)
+        if klines:
+            first, last = klines[0], klines[-1]
+            # 行内记录是 dict 或对象,日期字段名称不一致;fail-soft 取值。
+            def _day(row) -> str:
+                for key in ("date", "day", "trade_date", "time"):
+                    value = row.get(key) if isinstance(row, dict) else getattr(row, key, None)
+                    if value:
+                        return str(value)[:10]
+                return ""
+            injection["kline_range"] = [ _day(first), _day(last) ]
+        quote = data.get("quote") or {}
+        if isinstance(quote, dict) and quote:
+            injection["quote"] = True
+        if data.get("capital_flow"):
+            injection["capital_flow"] = True
+        if data.get("events"):
+            injection["events"] = len(data.get("events") or [])
+        if data.get("financial"):
+            injection["financial"] = True
+        if data.get("technical"):
+            injection["technical"] = True
+        provenance["data_injection"] = injection
+
+        provenance["run"] = {
+            "timeout_minutes": self.timeout_minutes,
+            "collection_timeout_seconds": self.collection_timeout_seconds,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
+            "llm_max_retries": self.llm_max_retries,
+            "debate_rounds": self.debate_rounds,
+            "analyst_types": list(self.analyst_types),
+            "deep_model": self.deep_model or "",
+            "quick_model": self.quick_model or "",
+            "cache_ttl_hours": self.cache_ttl_hours,
+        }
+        return provenance
 
     @staticmethod
     def _collect_toolkit_diagnostic(trace_id: str) -> dict:

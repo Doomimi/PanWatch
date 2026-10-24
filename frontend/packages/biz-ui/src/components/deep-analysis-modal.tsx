@@ -17,6 +17,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { AnalysisReader } from './analysis-reader'
 import { ToolkitDiagnostics } from './toolkit-diagnostics'
+import { DecisionProvenancePanel } from './decision-provenance'
 export { ToolkitDiagnostics } from './toolkit-diagnostics'
 import {
   subscribeSSE,
@@ -616,6 +617,11 @@ function DoneView({
           summary={rawData.toolkit_diagnostic.summary}
           recent={rawData.toolkit_diagnostic.recent || []}
         />
+      )}
+
+      {/* 决策溯源: 评级/置信度来源 + 模型配置 + 数据注入 */}
+      {rawData.decision_provenance && (
+        <DecisionProvenancePanel provenance={rawData.decision_provenance} />
       )}
 
       {/* 免责声明 */}
