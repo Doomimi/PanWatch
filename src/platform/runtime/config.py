@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     # day_of_week 使用 POSIX cron 语义(1-5=周一到周五)
     daily_report_cron: str = "30 15 * * 1-5"
 
+    # 价格提醒调度：扫描间隔/抖动/投递轮询。
+    # 扫描间隔是端到端延迟的主要来源（报价源秒级更新，60s 等于主动丢掉时效性）；
+    # 抖动仅用于与模拟盘扫描错峰，避免同刻并发写 SQLite，不应拿它换延迟；
+    # 投递轮询决定命中后多久被捡起发送。三者均可用环境变量覆盖，便于按实测回退。
+    price_alert_scan_interval_seconds: int = 20
+    price_alert_scan_jitter_seconds: int = 3
+    price_alert_delivery_interval_seconds: int = 3
+
     # 部署执行时区（任务调度、通知静默时段；浏览器显示使用用户本地时区）。
     # 统一使用一个环境变量控制：TZ（默认 Asia/Shanghai）。
     # 建议使用 IANA 时区名，如 Asia/Shanghai, America/New_York。

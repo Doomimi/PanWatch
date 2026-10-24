@@ -1544,7 +1544,9 @@ async def lifespan(app):
         settings = Settings()
         price_alert_scheduler = PriceAlertScheduler(
             timezone=settings.app_timezone,
-            interval_seconds=60,
+            interval_seconds=settings.price_alert_scan_interval_seconds,
+            jitter_seconds=settings.price_alert_scan_jitter_seconds,
+            delivery_interval_seconds=settings.price_alert_delivery_interval_seconds,
         )
         price_alert_scheduler.start()
         logger.info("价格提醒调度器已启动")
