@@ -1,4 +1,4 @@
-﻿﻿# PanWatch 0.19.0 -> 0.20.1 upgrade script
+﻿﻿﻿# PanWatch 0.19.0 -> 0.20.1 upgrade script
 # Run step by step in your own terminal and read the output of each step.
 
 $ErrorActionPreference = "Stop"
@@ -22,20 +22,20 @@ Write-Host "`n=== Step 2: build the image ==="
 Write-Host "NOTE: skipping scripts/build.ps1. It calls a host pnpm that is missing here,"
 Write-Host "      but the Dockerfile builds the frontend inside node:24.14.0-alpine with a"
 Write-Host "      corepack-pinned pnpm, so the host pnpm is not needed at all."
-Write-Host "The build needs the host proxy. Buildkit resolves host.docker.internal to the"
-Write-Host "wrong address, so add-host forces it to the host gateway, which was verified OK."
-$proxy = $env:HTTP_PROXY
-if (-not $proxy) { $proxy = Read-Host "Proxy for the build (e.g. http://host.docker.internal:7897)" }
+Write-Host "The build needs the host proxy. Docker Desktop 4.77 resolves"
+Write-Host "host.docker.internal to the wrong LAN address here, so the script probes the"
+Write-Host "real host IP and pins the proxy to it."
 Set-Location $ProjectRoot
-if ($proxy) {
-    Write-Host "Using build proxy: $proxy"
-    $env:HTTP_PROXY = $proxy
-    $env:HTTPS_PROXY = $proxy
-    $env:http_proxy = $proxy
-    $env:https_proxy = $proxy
-    $env:NO_PROXY = "localhost,127.0.0.1"
-}
-docker build --platform linux/amd64 --add-host=host.docker.internal:host-gateway --build-arg VERSION=$Version -t ${ImageName}:$Version .
+$hostIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like "192.168.*" -and $_.IPAddress -ne "192.168.1.120" } | Select-Object -First 1).IPAddress
+if (-not $hostIp) { $hostIp = Read-Host "Enter your Windows host LAN IP (e.g. 192.168.1.44)" }
+$proxy = "http://${hostIp}:7897"
+Write-Host "Using build proxy: $proxy"
+$env:HTTP_PROXY = $proxy
+$env:HTTPS_PROXY = $proxy
+$env:http_proxy = $proxy
+$env:https_proxy = $proxy
+$env:NO_PROXY = "localhost,127.0.0.1"
+docker build --platform linux/amd64 --build-arg VERSION=$Version -t ${ImageName}:$Version .
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed. Do not continue."; exit 1 }
 
 Write-Host "`n=== Step 3: record the old image id for rollback ==="
