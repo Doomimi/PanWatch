@@ -64,12 +64,29 @@ def apply_proxy_env(proxy: str | None) -> None:
     if p:
         os.environ["HTTP_PROXY"] = p
         os.environ["HTTPS_PROXY"] = p
-        os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,::1,0.0.0.0")
+        _extend_no_proxy(_GATEWAY_NO_PROXY_HOSTS)
         logger.info(f"HTTP/HTTPS 代理已应用: {p}")
     else:
         for key in ("HTTP_PROXY", "HTTPS_PROXY"):
             os.environ.pop(key, None)
         logger.info("HTTP/HTTPS 代理已清除")
+
+
+# 容器内访问宿主机服务的通用别名。AI base_url 指向 host.docker.internal 时，
+# 必须排除代理，否则 httpx(trust_env=True) 会把请求送进代理而失败。
+_GATEWAY_NO_PROXY_HOSTS = ("host.docker.internal", "gateway.docker.internal")
+
+
+def _extend_no_proxy(extra_hosts) -> None:
+    """Append hosts to NO_PROXY without dropping user-configured entries."""
+    current = os.environ.get("NO_PROXY") or "localhost,127.0.0.1,::1,0.0.0.0"
+    hosts = [item.strip() for item in current.split(",") if item.strip()]
+    lower = {item.lower() for item in hosts}
+    for host in extra_hosts:
+        if host.lower() not in lower:
+            hosts.append(host)
+            lower.add(host.lower())
+    os.environ["NO_PROXY"] = ",".join(hosts)
 
 
 def setup_proxy():
@@ -85,7 +102,7 @@ def setup_proxy():
             f"沿用现有环境变量代理: HTTP_PROXY={os.environ.get('HTTP_PROXY', '')} "
             f"HTTPS_PROXY={os.environ.get('HTTPS_PROXY', '')}"
         )
-        os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,::1,0.0.0.0")
+        _extend_no_proxy(_GATEWAY_NO_PROXY_HOSTS)
         return
 
     proxy = ""
