@@ -1,4 +1,4 @@
-﻿﻿﻿# PanWatch 0.19.0 -> 0.20.1 upgrade script
+﻿# PanWatch 0.19.0 -> 0.20.1 upgrade script
 # Run step by step in your own terminal and read the output of each step.
 
 $ErrorActionPreference = "Stop"
