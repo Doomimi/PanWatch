@@ -16,21 +16,29 @@ if ($answer -ne "yes") { Write-Host "Aborted."; exit 0 }
 Write-Host "`n=== Step 1: back up the database (do not skip) ==="
 docker exec $Container python -c "import os; p=os.environ.get('DATA_DIR','/app/data')+'/panwatch.db'; print('db:', p, os.path.getsize(p), 'bytes')"
 docker exec $Container python -c "import sqlite3, os; d=os.environ.get('DATA_DIR','/app/data'); s=sqlite3.connect(d+'/panwatch.db'); t=sqlite3.connect(d+'/panwatch.db.pre-0.20.1'); s.backup(t); t.close(); s.close(); print('backup ok')"
-docker exec $Container ls -la /app/data/*.db*
+docker exec $Container ls -la /app/data/ | Select-String "panwatch.db"
 
-Write-Host "`n=== Step 2: build the image (5-10 min) ==="
+Write-Host "`n=== Step 2: build the image ==="
+Write-Host "NOTE: skipping scripts/build.ps1. It calls a host pnpm that is missing here,"
+Write-Host "      but the Dockerfile builds the frontend inside node:24.14.0-alpine with a"
+Write-Host "      corepack-pinned pnpm, so the host pnpm is not needed at all."
 Set-Location $ProjectRoot
-& (Join-Path $ProjectRoot "scripts\build.ps1") -Version $Version
+docker build --platform linux/amd64 --build-arg VERSION=$Version -t ${ImageName}:$Version .
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed. Do not continue."; exit 1 }
 
 Write-Host "`n=== Step 3: record the old image id for rollback ==="
 docker images $ImageName --format "{{.Repository}}:{{.Tag}} {{.ID}}"
+Write-Host "Current container image id (save this for rollback):"
+docker inspect $Container --format "{{.Image}}"
 
 Write-Host "`n=== Step 4: recreate the container ==="
-Write-Host "NOTE: adjust the run flags below to match your original container."
-docker inspect $Container --format "{{json .Config.Env}}" | Write-Host
-docker inspect $Container --format "Ports: {{json .HostConfig.PortBindings}}" | Write-Host
-docker inspect $Container --format "Mounts: {{json .Mounts}}" | Write-Host
+Write-Host "Your current container config:"
+docker inspect $Container --format "Env: {{json .Config.Env}}"
+docker inspect $Container --format "Ports: {{json .HostConfig.PortBindings}}"
+docker inspect $Container --format "Mounts: {{json .Mounts}}"
+Write-Host "Compare with the docker run flags below. Adjust them if anything differs."
+$confirm = Read-Host "Recreate the container now? (yes/no)"
+if ($confirm -ne "yes") { Write-Host "Stopped before recreate. Image is built, container untouched."; exit 0 }
 docker stop $Container
 docker rm $Container
 docker run -d --name $Container -p 8000:8000 -v panwatch_data:/app/data -e TZ=Asia/Shanghai ${ImageName}:$Version
