@@ -52,9 +52,18 @@ docker inspect $Container --format "Mounts: {{json .Mounts}}"
 Write-Host "Compare with the docker run flags below. Adjust them if anything differs."
 $confirm = Read-Host "Recreate the container now? (yes/no)"
 if ($confirm -ne "yes") { Write-Host "Stopped before recreate. Image is built, container untouched."; exit 0 }
+# Reuse the existing container's own env so a rebuild never drops a variable.
+# Hardcoding these once lost PLAYWRIGHT_SKIP_BROWSER_INSTALL and NO_PROXY,
+# which broke the market catalog fetch (502 through the proxy).
+$envPairs = docker inspect $Container --format '{{range .Config.Env}}{{println .}}{{end}}' | Where-Object { $_ -match '=' }
 docker stop $Container
 docker rm $Container
-docker run -d --name $Container -p 8000:8000 -v panwatch_data:/app/data -e TZ=Asia/Shanghai ${ImageName}:$Version
+$dockerRun = @("run", "-d", "--name", $Container, "-p", "8000:8000", "-v", "panwatch_data:/app/data")
+foreach ($pair in $envPairs) { $dockerRun += @("-e", $pair) }
+$dockerRun += "${ImageName}:$Version"
+Write-Host "Reusing these env vars:"
+$envPairs | ForEach-Object { Write-Host "  $_" }
+docker @dockerRun
 
 Write-Host "`n=== Step 5: verify ==="
 Start-Sleep -Seconds 20
