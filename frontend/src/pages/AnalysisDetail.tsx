@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next'
 import { buildAnalysisSections } from '@panwatch/biz-ui/analysis-sections'
 import { AnalysisMetadata } from '@panwatch/biz-ui/components/analysis-metadata'
 import { AnalysisReader } from '@panwatch/biz-ui/components/analysis-reader'
+import { DecisionProvenancePanel } from '@panwatch/biz-ui/components/decision-provenance'
 import ShareCardModal from '../components/ShareCardModal'
 import { suggestionPresentation, type SuggestionStateInput } from '@panwatch/biz-ui/components/suggestion-action'
 import { marketSignTextClass } from '@/lib/market-colors'
@@ -319,6 +320,9 @@ export default function AnalysisDetailPage() {
           {/* 正文 */}
           <article>
           <div className="mb-4"><AnalysisMetadata result={result} /></div>
+          {rawData.decision_provenance && (
+            <div className="mb-4"><DecisionProvenancePanel provenance={rawData.decision_provenance} /></div>
+          )}
           {/* 决策摘要(移动端在正文顶部;桌面端移到右侧目录区,见下方 aside) */}
           {sug && (
             <div className="lg:hidden rounded-xl bg-accent/30 p-4 mb-6 flex items-center gap-3 flex-wrap">

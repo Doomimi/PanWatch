@@ -73,6 +73,7 @@ export interface DeepAnalysisResult {
     trader_plan: string
     from_cache?: boolean
     notified?: boolean
+    decision_provenance?: DecisionProvenance
     toolkit_diagnostic?: {
       summary: { hit: number; miss: number; passthrough: number; fallthrough?: number; error: number }
       recent: Array<{
@@ -89,6 +90,27 @@ export interface DeepAnalysisResult {
   timestamp?: string
   analysis_date?: string
   generated_at?: string
+}
+
+/** 决策溯源:解释"这个结论怎么来的"。旧记录没有该字段时为空。 */
+export interface DecisionProvenance {
+  /** 评级从哪里来：state.final_rating / pm_text.label / pm_text.keyword / upstream.decision / unresolved */
+  rating_source?: string
+  upstream_rating?: string
+  confidence?: number
+  confidence_source?: string
+  review_required?: boolean
+  model_config?: Record<string, unknown>
+  data_injection?: {
+    kline_bars?: number
+    kline_range?: [string, string] | string[]
+    quote?: boolean
+    capital_flow?: boolean
+    events?: number
+    financial?: boolean
+    technical?: boolean
+  }
+  run?: Record<string, unknown>
 }
 
 export interface ProgressStage {

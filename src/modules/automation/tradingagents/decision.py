@@ -68,6 +68,7 @@ def map_state_to_result(
     ta_result: dict[str, Any],
     model_label: str = "",
     output_language: str = "Chinese",
+    provenance: dict[str, Any] | None = None,
 ) -> AnalysisResult:
     """主入口:把 TradingAgents 的 final_state 映射成 AnalysisResult。
 
@@ -75,6 +76,8 @@ def map_state_to_result(
         stock: PanWatch StockConfig(symbol/name/market)
         ta_result: {"decision": str, "final_state": dict, "cost_usd": float}
         model_label: 形如 "deepseek/deepseek-chat",写到 markdown 末尾
+        provenance: 决策溯源(评级/置信度来源、数据注入统计、
+            模型配置、运行参数)，落到 raw_data.decision_provenance
     """
     state = ta_result.get("final_state") or {}
     cost_usd = float(ta_result.get("cost_usd", 0.0) or 0.0)
@@ -86,27 +89,35 @@ def map_state_to_result(
     # 只有旧状态没有该字段时才沿用正文标签/decision 的历史兼容逻辑。
     final_text = state.get("final_trade_decision") or ""
     upstream_rating = (ta_result.get("decision") or "").strip().lower()
+    rating_source = ""
     if "final_rating" in state:
         rating_raw = str(state.get("final_rating") or REVIEW_RATING).strip().lower()
         if rating_raw not in RATING_LABEL_MAP:
             rating_raw = REVIEW_RATING
+        rating_source = "state.final_rating"
     elif upstream_rating == REVIEW_RATING:
         # REVIEW 是上游对整份 PM 输出的不可解析判定,不能被正文里的评级词覆盖。
         rating_raw = REVIEW_RATING
+        rating_source = "upstream.decision"
     else:
         rating_raw = _parse_rating_label(final_text)
+        rating_source = "pm_text.label" if rating_raw else ""
     if rating_raw not in RATING_LABEL_MAP and rating_raw != REVIEW_RATING:
         rating_raw = upstream_rating
+        rating_source = "upstream.decision" if rating_raw in RATING_LABEL_MAP else rating_source
     if rating_raw not in RATING_LABEL_MAP and rating_raw != REVIEW_RATING:
         rating_raw = _parse_rating_from_text(final_text)
+        rating_source = "pm_text.keyword" if rating_raw else rating_source
 
     if rating_raw not in RATING_LABEL_MAP:
         rating_raw = REVIEW_RATING
+        # REVIEW 本身是合法终态(上游不能解析),只有真的没来源才标记 unresolved。
+        rating_source = rating_source or "unresolved"
     review_required = rating_raw == REVIEW_RATING
     action = RATING_ACTION_MAP.get(rating_raw, "hold")
     action_label = ("Review required" if english else REVIEW_LABEL) if review_required else rating_labels.get(rating_raw, hold_label)
 
-    confidence = _extract_confidence(state, rating_raw)
+    confidence, confidence_source = _extract_confidence(state, rating_raw)
     short_reason = _short_reason(state)
 
     suggestion = {
@@ -169,11 +180,70 @@ def map_state_to_result(
             "trader_plan": state.get("trader_investment_plan") or "",
             "run_settings": state.get("run_settings") or {},
             "memory_note": state.get("memory_note") or "",
+            "decision_provenance": _build_provenance(
+                state=state,
+                ta_result=ta_result,
+                rating_raw=rating_raw,
+                rating_source=rating_source,
+                upstream_rating=upstream_rating,
+                confidence=confidence,
+                confidence_source=confidence_source,
+                suggestion=suggestion,
+                provenance=provenance,
+            ),
         },
     )
 
 
 # ---- helpers ----
+
+
+# 决策溯源:回答"这个结论是怎么来的"——评级从哪里来、置信度怎么算的、
+# 模型配置是什么、数据注入情况如何。落到 raw_data 供详情页/复盘展示。
+def _build_provenance(
+    *,
+    state: dict,
+    ta_result: dict,
+    rating_raw: str,
+    rating_source: str,
+    upstream_rating: str,
+    confidence: float,
+    confidence_source: str,
+    suggestion: dict,
+    provenance: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """汇总一次深度分析的可追溯信息，全部为 JSON 安全类型。
+
+    评级/置信度来源由本模块推导；模型配置、数据注入与运行参数由调用方
+    (agent.py) 传入。任何缺失/异常都安全降级，不影响主流程。
+    """
+    result: dict[str, Any] = {}
+
+    settings = state.get("run_settings")
+    if isinstance(settings, dict):
+        # 只保留能解释"为什么得出这个结论"的字段，不落密钥。
+        keys = (
+            "llm_provider", "backend_url", "deep_think_llm", "quick_think_llm",
+            "max_debate_rounds", "max_risk_discuss_rounds", "selected_analysts",
+            "online_tools", "llm_timeout_seconds", "llm_max_retries", "holding_period_days",
+        )
+        result["model_config"] = {k: settings[k] for k in keys if k in settings}
+    else:
+        # 旧记录没有 run_settings 时也保持结构完整，前端无需防空。
+        result["model_config"] = {}
+
+    result["rating_source"] = rating_source
+    result["upstream_rating"] = upstream_rating
+    result["confidence"] = round(float(confidence), 2)
+    result["confidence_source"] = confidence_source
+    result["review_required"] = bool(suggestion.get("review_required"))
+
+    extra = dict(provenance or {})
+    injection = extra.pop("data_injection", None)
+    if isinstance(injection, dict):
+        result["data_injection"] = injection
+    result.update(extra)
+    return result
 
 
 # 分隔符字符类同时覆盖半角(: -)与全角(： －)标点 —— 真实中文 PM 正文用全角冒号"：",
@@ -244,15 +314,19 @@ _RATING_CONFIDENCE_FALLBACK = {
 }
 
 
-def _extract_confidence(state: dict, rating_raw: str = "") -> float:
+def _extract_confidence(state: dict, rating_raw: str = "") -> tuple[float, str]:
     """置信度(0-10):优先抓 PM/风控/交易员文本里的显式数字(A 方案);
-    抓不到则按评级推导(B 方案),不再一律返回 5.0。"""
+    抓不到则按评级推导(B 方案),不再一律返回 5.0。
+
+    Returns: (置信度, 来源)——来源取 "pm_text" / "risk_text" / "trader_text" /
+        "rating_inferred" / "default",写入决策溯源。
+    """
     candidates = [
-        state.get("final_trade_decision", ""),
-        _risk_judgment(state),
-        state.get("trader_investment_plan", ""),
+        ("pm_text", state.get("final_trade_decision", "")),
+        ("risk_text", _risk_judgment(state)),
+        ("trader_text", state.get("trader_investment_plan", "")),
     ]
-    for text in candidates:
+    for source, text in candidates:
         if not text:
             continue
         for pat in _CONFIDENCE_PATTERNS:
@@ -262,11 +336,13 @@ def _extract_confidence(state: dict, rating_raw: str = "") -> float:
                     v = float(m.group(1))
                     if v > 10:  # 百分制转 0-10
                         v = v / 10
-                    return max(0.0, min(10.0, v))
+                    return max(0.0, min(10.0, v)), source
                 except (ValueError, IndexError):
                     continue
-    # B 兜底:按评级推导(无可识别评级才回退 5.0)
-    return _RATING_CONFIDENCE_FALLBACK.get(rating_raw, 5.0)
+    # B 底应:按评级推导(无可识别评级才回退 5.0)
+    if rating_raw in _RATING_CONFIDENCE_FALLBACK:
+        return _RATING_CONFIDENCE_FALLBACK[rating_raw], "rating_inferred"
+    return 5.0, "default"
 
 
 def _short_reason(state: dict, limit: int = 120) -> str:
