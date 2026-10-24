@@ -52,6 +52,13 @@ WORKDIR /app
 #   https://github.com/microsoft/playwright/blob/v1.57.0/packages/playwright-core/src/server/registry/nativeDeps.ts
 # 固定 Bookworm：Trixie 的 libgbm1 会强制引入 Mesa / LLVM 图形驱动栈。
 # 不额外安装 GTK / EGL，截图使用 Chromium 自带的软件渲染。
+# 可选构建代理: RUN 阶段的 apt 不跟 Docker Desktop 的代理配置，
+# 必须在这里声明才能用 --build-arg http_proxy=... 传入。
+# 不传则为空，行为不变。
+ARG http_proxy=
+ARG https_proxy=
+ARG no_proxy=localhost,127.0.0.1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     # 中文字体

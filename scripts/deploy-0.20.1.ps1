@@ -35,7 +35,8 @@ $env:HTTPS_PROXY = $proxy
 $env:http_proxy = $proxy
 $env:https_proxy = $proxy
 $env:NO_PROXY = "localhost,127.0.0.1"
-docker build --platform linux/amd64 --build-arg VERSION=$Version -t ${ImageName}:$Version .
+# RUN 阶段的 apt 不跟 Docker Desktop 代理，必须作为 build-arg 显式传入（Dockerfile 已声明 ARG）。
+docker build --platform linux/amd64 --build-arg VERSION=$Version --build-arg http_proxy=$proxy --build-arg https_proxy=$proxy --build-arg no_proxy=localhost,127.0.0.1 -t ${ImageName}:$Version .
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed. Do not continue."; exit 1 }
 
 Write-Host "`n=== Step 3: record the old image id for rollback ==="
