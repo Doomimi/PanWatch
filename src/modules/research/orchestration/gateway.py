@@ -6,6 +6,35 @@ from pan_investment_research import ModelReply
 from src.platform.ai.ai_failover import _mark_fail, _mark_ok, classify_ai_error, ERR_FATAL
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """Reasoning models bill thinking tokens against the same max_tokens budget."""
+    lowered = (model or "").lower()
+    return any(marker in lowered for marker in ("r1", "qwq", "reasoning", "think", "o1-", "o3-", "o4-"))
+
+
+def _reply_text(message) -> str:
+    """content 优先；推理模型把预算全花在思考上时回退到 reasoning_content。"""
+    content = getattr(message, "content", None)
+    if content:
+        return content
+    dump = getattr(message, "model_dump", None)
+    if callable(dump):
+        try:
+            data = dump()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for key in ("reasoning_content", "reasoning", "thinking", "reasoning_text"):
+                if data.get(key):
+                    return data[key]
+            nested = data.get("model_extra")
+            if isinstance(nested, dict):
+                for key in ("reasoning_content", "reasoning", "thinking", "reasoning_text"):
+                    if nested.get(key):
+                        return nested[key]
+    return ""
+
+
 class ResearchModelGateway:
     def __init__(self, client):
         self.client = client
@@ -21,7 +50,13 @@ class ResearchModelGateway:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise TimeoutError("research model deadline")
-                kwargs = {"model": client.model, "messages": messages, "max_tokens": max_output_tokens}
+                kwargs = {"model": client.model, "messages": messages}
+                # 推理模型的思考 token 计入同一个 max_tokens 预算，
+                # 按原值下发会把预算吃光，导致 content 为空。
+                if _is_reasoning_model(client.model):
+                    kwargs["max_tokens"] = max(max_output_tokens * 4, 4096)
+                else:
+                    kwargs["max_tokens"] = max_output_tokens
                 if client.model.startswith("glm-5.3"):
                     kwargs["reasoning_effort"] = "low"
                     if not tools:
@@ -33,7 +68,7 @@ class ResearchModelGateway:
                 message = reply.choices[0].message
                 usage = {"input_tokens": reply.usage.prompt_tokens, "output_tokens": reply.usage.completion_tokens} if reply.usage else {}
                 calls = [c.model_dump() for c in (message.tool_calls or [])]
-                return ModelReply(message.content or "", str(getattr(reply, "model", None) or label), calls, usage, reply.choices[0].finish_reason or "")
+                return ModelReply(_reply_text(message), str(getattr(reply, "model", None) or label), calls, usage, reply.choices[0].finish_reason or "")
             except Exception as exc:
                 if classify_ai_error(exc) == ERR_FATAL:
                     raise

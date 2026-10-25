@@ -136,3 +136,37 @@ def test_stream_usage_and_empty_choices():
         "source": "provider",
     }
     assert client.total_tokens_used == 42
+
+
+def test_empty_api_key_is_tolerated():
+    """本地推理服务（Strata / Ollama / llama.cpp）在配置里 api_key 留空。
+
+    openai SDK 对空字符串 api_key 会在构造阶段就抛 "Missing credentials"，
+    请求根本发不出去。AIClient 应把它替换成占位值，保证调用方能走到 HTTP 层。
+    """
+    client = AIClient(base_url="http://mock", api_key="", model="mock-model")
+    assert client.api_key == ""
+    assert client.client.api_key == "EMPTY"
+
+
+def test_empty_api_key_still_reaches_transport():
+    """空 api_key 不应在本地就失败，错误只可能来自真实网络层。"""
+    client = AIClient(base_url="http://127.0.0.1:1", api_key="", model="mock-model")
+    called = {}
+
+    async def fake_create(**kwargs):
+        called.update(kwargs)
+        raise RuntimeError("transport-layer")
+
+    client.client.chat.completions.create = fake_create
+
+    async def run():
+        try:
+            await client.chat(system_prompt="s", user_content="u", temperature=None)
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+
+    err = asyncio.run(run())
+    assert err == "transport-layer"
+    assert called["model"] == "mock-model"
