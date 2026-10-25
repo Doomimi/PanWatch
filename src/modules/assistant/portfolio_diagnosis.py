@@ -304,6 +304,13 @@ async def run_portfolio_diagnosis(db, stream, ai_client, execute_tool, *, trace:
             if kind == "token":
                 parts.append(payload)
                 await stream.publish("token", {"text": payload})
+            elif kind == "message" and not parts:
+                # 推理模型只产出 reasoning_content 时 token 事件为空，
+                # 用完整消息里的兜底文本补一次推送。
+                fallback = payload.get("content") or ""
+                if fallback:
+                    parts.append(fallback)
+                    await stream.publish("token", {"text": fallback})
         summary = "".join(parts)
     except Exception as e:  # noqa: BLE001 — 流式汇总失败降级为非流式
         logger.warning("流式汇总失败,降级非流式: %s", e)

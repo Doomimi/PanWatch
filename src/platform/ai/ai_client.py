@@ -14,9 +14,12 @@ class AIClient:
     """OpenAI 协议兼容的 AI 客户端"""
 
     def __init__(self, base_url: str, api_key: str, model: str = "", proxy: str = ""):
+        # 本地推理服务（llama.cpp / Strata / Ollama 等）通常不校验 key，用户在配置里留空。
+        # openai SDK 对空字符串 api_key 会直接抛 "Missing credentials"，请求根本发不出去，
+        # 所以这里统一替换成占位值。
         kwargs = {
             "base_url": base_url,
-            "api_key": api_key,
+            "api_key": api_key or "EMPTY",
         }
         if proxy:
             kwargs["http_client"] = None  # TODO: 如需代理，用 httpx 配置
@@ -28,6 +31,45 @@ class AIClient:
         self.model = model
         self.total_tokens_used = 0
         self.last_usage = None
+
+    # 推理模型（llama.cpp / vLLM / DeepSeek 等）在预算被思考吃光时 content 为 null，
+    # 只有这些自定义字段有值。按优先级回退，避免调用方把空回复当成失败。
+    _REASONING_KEYS = ("reasoning_content", "reasoning", "thinking", "reasoning_text")
+
+    @classmethod
+    def _reasoning_text(cls, data) -> str:
+        """Read the first non-empty reasoning field from a plain dict payload."""
+        if not isinstance(data, dict):
+            return ""
+        for key in cls._REASONING_KEYS:
+            text = data.get(key)
+            if text:
+                return text
+        nested = data.get("model_extra")
+        if isinstance(nested, dict):
+            return cls._reasoning_text(nested)
+        return ""
+
+    @classmethod
+    def _extract_content(cls, message) -> str:
+        """Extract usable text from a chat completion message.
+
+        content 优先；content 为 null 时回退到 reasoning_content 等自定义字段。
+        """
+        content = getattr(message, "content", None)
+        if content:
+            return content
+        # pydantic v2 的 model_dump() 把 extra 字段平铺到顶层，
+        # 而不是放在 "model_extra" 键下，所以直接查顶层键。
+        dump = getattr(message, "model_dump", None)
+        if callable(dump):
+            try:
+                text = cls._reasoning_text(dump())
+            except Exception:
+                text = ""
+            if text:
+                return text
+        return cls._reasoning_text(getattr(message, "model_extra", None))
 
     async def chat(
         self,
@@ -84,7 +126,7 @@ class AIClient:
                         f"{response.usage.completion_tokens} = {response.usage.total_tokens}"
                     )
 
-            return response.choices[0].message.content or ""
+            return self._extract_content(response.choices[0].message)
 
         except Exception as e:
             logger.error(f"AI 调用失败: {e}")
@@ -124,7 +166,7 @@ class AIClient:
                         f"Token usage: {response.usage.prompt_tokens} + "
                         f"{response.usage.completion_tokens} = {response.usage.total_tokens}"
                     )
-            return response.choices[0].message.content or ""
+            return self._extract_content(response.choices[0].message)
         except Exception as e:
             logger.error(f"AI 多轮对话调用失败: {e}")
             raise
@@ -234,6 +276,14 @@ class AIClient:
             if delta.content:
                 content_parts.append(delta.content)
                 yield ("token", delta.content)
+            elif not content_parts:
+                # 推理模型先下发 reasoning_content，content 可能为空。
+                # 流式阶段不吐出推理文本（会污染 SSE），只缓存为兜底。
+                reasoning = self._reasoning_text(getattr(delta, "model_dump", lambda: {})())
+                if not reasoning:
+                    reasoning = self._reasoning_text(getattr(delta, "model_extra", None))
+                if reasoning:
+                    content_parts.append(reasoning)
             for tc in delta.tool_calls or []:
                 acc = tool_calls_acc.setdefault(
                     tc.index, {"id": "", "name": "", "arguments": ""}
